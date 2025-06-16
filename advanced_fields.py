@@ -107,7 +107,6 @@ def extract_work_experience(text):
                 'location': location,
                 'start_date': start_date,
                 'end_date': end_date,
-                'responsibilities': responsibilities,
                 'description': exp
             })
     
