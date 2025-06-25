@@ -7,6 +7,7 @@ import docx2txt
 from pdfminer.high_level import extract_text
 import spacy
 from fuzzywuzzy import fuzz
+from collections import Counter
 
 nlp = spacy.load("en_core_web_sm")
 
@@ -55,13 +56,14 @@ SKILL_SET = {
     "git", "linux", "aws", "azure", "docker", "kubernetes", "power bi", "tableau"
 }
 
-def fuzzy_skill_match(text, threshold=80):
+def skill_match(text):
     found = set()
     text_lower = text.lower()
     for skill in SKILL_SET:
-        if fuzz.partial_ratio(skill, text_lower) >= threshold:
+        if skill in text_lower:
             found.add(skill)
     return list(found)
+
 
 SECTION_HEADERS = {
     "education": ["education", "academic background"],
@@ -89,6 +91,42 @@ def group_entries(lines):
     entries = re.split(r'\n{2,}', content)
     return [e.strip() for e in entries if e.strip()]
 
+def parse_projects(entries):
+    projects = []
+    for entry in entries:
+        lines = entry.split('\n')
+        if not lines:
+            continue
+        # Assume first line is title, rest is description
+        title = lines[0].strip()
+        desc = ' '.join(l.strip() for l in lines[1:] if l.strip())
+        # Try to extract date (e.g., 2020, 2021-2022, Jan 2020, etc.)
+        date_match = re.search(r'(\b\d{4}\b|\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.? \d{4}\b)', entry, re.IGNORECASE)
+        date = date_match.group(0) if date_match else ''
+        projects.append({"title": title, "description": desc, "date": date})
+    return projects
+
+def parse_certifications(entries):
+    certs = []
+    for entry in entries:
+        lines = entry.split('\n')
+        if not lines:
+            continue
+        # Assume first line is cert name, look for issuer and date
+        name = lines[0].strip()
+        issuer = ''
+        date = ''
+        for l in lines[1:]:
+            # Look for issuer keywords
+            if any(x in l.lower() for x in ["by ", "from ", "issued by", "authority"]):
+                issuer = l.strip()
+            # Look for date
+            date_match = re.search(r'(\b\d{4}\b|\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.? \d{4}\b)', l, re.IGNORECASE)
+            if date_match:
+                date = date_match.group(0)
+        certs.append({"name": name, "issuer": issuer, "date": date})
+    return certs
+
 def parse_resume_offline(file_path):
     text = extract_text_from_file(file_path)
     sections = extract_sections(text)
@@ -98,11 +136,11 @@ def parse_resume_offline(file_path):
         "email": extract_email(text),
         "phone": extract_phone(text),
         "links": extract_links(text),
-        "skills": ", ".join(fuzzy_skill_match(text)),
+        "skills": ", ".join(skill_match(text)),
         "education": group_entries(sections.get("education", [])),
         "experience": group_entries(sections.get("experience", [])),
-        "certifications": group_entries(sections.get("certifications", [])),
-        "projects": group_entries(sections.get("projects", [])),
+        "certifications": parse_certifications(group_entries(sections.get("certifications", []))),
+        "projects": parse_projects(group_entries(sections.get("projects", []))),
         "raw_preview": text[:400] + "..."
     }
 
@@ -116,13 +154,14 @@ def export_to_csv(data, csv_path):
         "skills": data.get("skills", ""),
         "education": "\n\n".join(data.get("education", [])),
         "experience": "\n\n".join(data.get("experience", [])),
-        "certifications": "\n\n".join(data.get("certifications", [])),
-        "projects": "\n\n".join(data.get("projects", []))
+        "certifications": "\n\n".join(json.dumps(c, ensure_ascii=False) for c in data.get("certifications", [])),
+        "projects": "\n\n".join(json.dumps(p, ensure_ascii=False) for p in data.get("projects", []))
     }
     with open(csv_path, mode='w', newline='', encoding='utf-8') as f:
         writer = csv.DictWriter(f, fieldnames=headers)
         writer.writeheader()
         writer.writerow(row)
+
 
 def export_to_sqlite(data, db_path="output/resumes.db"):
     conn = sqlite3.connect(db_path)
@@ -142,20 +181,20 @@ def export_to_sqlite(data, db_path="output/resumes.db"):
         )
     ''')
     cursor.execute('''
-        INSERT INTO resumes (
-            name, email, phone, links, skills,
-            education, experience, certifications, projects
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ''', (
-        data.get("name", ""),
-        data.get("email", ""),
-        data.get("phone", ""),
-        ", ".join(data.get("links", [])),
-        data.get("skills", ""),
-        "\n\n".join(data.get("education", [])),
-        "\n\n".join(data.get("experience", [])),
-        "\n\n".join(data.get("certifications", [])),
-        "\n\n".join(data.get("projects", []))
+    INSERT INTO resumes (
+        name, email, phone, links, skills,
+        education, experience, certifications, projects
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+''', (
+    data.get("name", ""),
+    data.get("email", ""),
+    data.get("phone", ""),
+    ", ".join(data.get("links", [])),
+    data.get("skills", ""),
+    "\n\n".join(data.get("education", [])),
+    "\n\n".join(data.get("experience", [])),
+    "\n\n".join(json.dumps(c, ensure_ascii=False) for c in data.get("certifications", [])),
+    "\n\n".join(json.dumps(p, ensure_ascii=False) for p in data.get("projects", []))
     ))
     conn.commit()
     conn.close()
