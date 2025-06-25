@@ -2,6 +2,7 @@ import re
 import os
 import json
 import csv
+import sqlite3
 import docx2txt
 from pdfminer.high_level import extract_text
 import spacy
@@ -123,14 +124,59 @@ def export_to_csv(data, csv_path):
         writer.writeheader()
         writer.writerow(row)
 
-if __name__ == "__main__":
-    input_path = "data/sample_resume.pdf"  
-    parsed = parse_resume_offline(input_path)
+def export_to_sqlite(data, db_path="output/resumes.db"):
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS resumes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT,
+            email TEXT,
+            phone TEXT,
+            links TEXT,
+            skills TEXT,
+            education TEXT,
+            experience TEXT,
+            certifications TEXT,
+            projects TEXT
+        )
+    ''')
+    cursor.execute('''
+        INSERT INTO resumes (
+            name, email, phone, links, skills,
+            education, experience, certifications, projects
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ''', (
+        data.get("name", ""),
+        data.get("email", ""),
+        data.get("phone", ""),
+        ", ".join(data.get("links", [])),
+        data.get("skills", ""),
+        "\n\n".join(data.get("education", [])),
+        "\n\n".join(data.get("experience", [])),
+        "\n\n".join(data.get("certifications", [])),
+        "\n\n".join(data.get("projects", []))
+    ))
+    conn.commit()
+    conn.close()
 
+def process_resume_folder(folder_path):
     os.makedirs("output", exist_ok=True)
-    with open("output/parsed_resume.json", "w") as f:
-        json.dump(parsed, f, indent=2)
+    for file_name in os.listdir(folder_path):
+        if file_name.endswith(".pdf") or file_name.endswith(".docx"):
+            file_path = os.path.join(folder_path, file_name)
+            print(f"\n📄 Processing: {file_name}")
+            parsed = parse_resume_offline(file_path)
 
-    export_to_csv(parsed, "output/parsed_resume.csv")
-    print("\nResume parsed to JSON and CSV")
+            json_name = file_name.rsplit('.', 1)[0] + ".json"
+            csv_name = file_name.rsplit('.', 1)[0] + ".csv"
 
+            with open(f"output/{json_name}", "w") as f:
+                json.dump(parsed, f, indent=2)
+
+            export_to_csv(parsed, f"output/{csv_name}")
+            export_to_sqlite(parsed, "output/resumes.db")
+
+if __name__ == "__main__":
+    process_resume_folder("data")
+    print("\n✅ All resumes processed and saved to output folder (JSON + CSV + SQLite).")
